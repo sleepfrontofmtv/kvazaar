@@ -587,7 +587,7 @@ void kvz_intra_build_reference(
   }
 }
 
-static void intra_recon_tb_leaf(
+void kvz_intra_recon_tb_leaf(
   encoder_state_t *const state,
   int x,
   int y,
@@ -694,11 +694,11 @@ void kvz_intra_recon_cu(
     const bool has_chroma = mode_chroma != -1 && x % 8 == 0 && y % 8 == 0;
     // Process a leaf TU.
     if (has_luma) {
-      intra_recon_tb_leaf(state, x, y, depth, mode_luma, lcu, COLOR_Y);
+      kvz_intra_recon_tb_leaf(state, x, y, depth, mode_luma, lcu, COLOR_Y);
     }
     if (has_chroma) {
-      intra_recon_tb_leaf(state, x, y, depth, mode_chroma, lcu, COLOR_U);
-      intra_recon_tb_leaf(state, x, y, depth, mode_chroma, lcu, COLOR_V);
+      kvz_intra_recon_tb_leaf(state, x, y, depth, mode_chroma, lcu, COLOR_U);
+      kvz_intra_recon_tb_leaf(state, x, y, depth, mode_chroma, lcu, COLOR_V);
     }
 
     kvz_quantize_lcu_residual(state, has_luma, has_chroma, x, y, depth, cur_cu, lcu);

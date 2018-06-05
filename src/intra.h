@@ -127,4 +127,13 @@ void kvz_intra_recon_cu(
   cu_info_t *cur_cu,
   lcu_t *lcu);
 
+void kvz_intra_recon_tb_leaf(
+  encoder_state_t *const state,
+  int x,
+  int y,
+  int depth,
+  int8_t intra_mode,
+  lcu_t *lcu,
+  color_t color);
+
 #endif

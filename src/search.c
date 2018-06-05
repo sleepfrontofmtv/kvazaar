@@ -376,6 +376,40 @@ static uint8_t get_ctx_cu_split_model(const lcu_t *lcu, int x, int y, int depth)
   return condA + condL;
 }
 
+double cu_zero_cost(const encoder_state_t *state,
+                        lcu_t *work_tree,
+                        const int x, const int y,
+                        const int depth) 
+{
+  int x_local = SUB_SCU(x);
+  int y_local = SUB_SCU(y);
+  int cu_width = LCU_WIDTH >> depth;
+  lcu_t *const lcu = &work_tree[depth];
+
+  const int luma_index = y_local * LCU_WIDTH + x_local;
+  const int chroma_index = (y_local / 2) * LCU_WIDTH_C + (x_local / 2);
+
+  double ssd = 0.0;
+  ssd += LUMA_MULT * kvz_pixels_calc_ssd(
+    &lcu->ref.y[luma_index], &lcu->rec.y[luma_index],
+    LCU_WIDTH, LCU_WIDTH, cu_width
+    );
+  if (x % 8 == 0 && y % 8 == 0 && state->encoder_control->chroma_format != KVZ_CSP_400) {
+    ssd += CHROMA_MULT * kvz_pixels_calc_ssd(
+      &lcu->ref.u[chroma_index], &lcu->rec.u[chroma_index],
+      LCU_WIDTH_C, LCU_WIDTH_C, cu_width / 2
+      );
+    ssd += CHROMA_MULT * kvz_pixels_calc_ssd(
+      &lcu->ref.v[chroma_index], &lcu->rec.v[chroma_index],
+      LCU_WIDTH_C, LCU_WIDTH_C, cu_width / 2
+      );
+  }
+  // Save the pixels at a lower level of the working tree.
+  copy_cu_pixels(x_local, y_local, cu_width, lcu, &work_tree[depth + 1]);
+
+  return ssd;
+}
+
 /**
  * Search every mode from 0 to MAX_PU_DEPTH and return cost of best mode.
  * - The recursion is started at depth 0 and goes in Z-order to MAX_PU_DEPTH.
@@ -392,7 +426,7 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
   const videoframe_t * const frame = state->tile->frame;
   int cu_width = LCU_WIDTH >> depth;
   double cost = MAX_INT;
-  double inter_zero_coeff_cost = MAX_INT;
+  double zero_coeff_cost = MAX_INT;
   uint32_t inter_bitcost = MAX_INT;
   cu_info_t *cur_cu;
 
@@ -506,14 +540,19 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
     // mode search of adjacent CUs.
     if (cur_cu->type == CU_INTRA) {
       assert(cur_cu->part_size == SIZE_2Nx2N || cur_cu->part_size == SIZE_NxN);
+      const bool is_leaf = depth == cur_cu->tr_depth;
       cur_cu->intra.mode_chroma = cur_cu->intra.mode;
       lcu_fill_cu_info(lcu, x_local, y_local, cu_width, cu_width, cur_cu);
-      kvz_intra_recon_cu(state,
-                         x, y,
-                         depth,
-                         cur_cu->intra.mode, -1, // skip chroma
-                         NULL, lcu);
 
+      if (is_leaf) {
+        kvz_intra_recon_tb_leaf(state, x, y, depth, cur_cu->intra.mode, lcu, COLOR_Y);
+      } else {
+        kvz_intra_recon_cu(state,
+          x, y,
+          depth,
+          cur_cu->intra.mode, -1, // skip chroma
+          NULL, lcu);
+      }
       if (x % 8 == 0 && y % 8 == 0 && state->encoder_control->chroma_format != KVZ_CSP_400) {
         // There is almost no benefit to doing the chroma mode search for
         // rd2. Possibly because the luma mode search already takes chroma
@@ -524,12 +563,27 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
           lcu_fill_cu_info(lcu, x_local, y_local, cu_width, cu_width, cur_cu);
         }
 
-        kvz_intra_recon_cu(state,
-                           x, y,
-                           depth,
-                           -1, cur_cu->intra.mode_chroma, // skip luma
-                           NULL, lcu);
+        if (is_leaf) {
+          kvz_intra_recon_tb_leaf(state, x, y, depth, cur_cu->intra.mode_chroma, lcu, COLOR_U);
+          kvz_intra_recon_tb_leaf(state, x, y, depth, cur_cu->intra.mode_chroma, lcu, COLOR_V);
+        } else {
+          kvz_intra_recon_cu(state,
+            x, y,
+            depth,
+            -1, cur_cu->intra.mode_chroma, // skip luma
+            NULL, lcu);
+        }
       }
+
+      const bool has_chroma = cur_cu->intra.mode_chroma != -1 && x % 8 == 0 && y % 8 == 0;
+
+      //Calculate cost for zero coefficients
+      if (!ctrl->cfg.lossless && !ctrl->cfg.rdoq_enable && is_leaf && depth != MAX_PU_DEPTH) {
+        zero_coeff_cost = cu_zero_cost(state, work_tree, x, y, depth) + calc_mode_bits(state, lcu, cur_cu, x, y) *state->lambda;
+      }
+      
+      if (is_leaf) kvz_quantize_lcu_residual(state, true, has_chroma, x, y, depth, cur_cu, lcu);
+
     } else if (cur_cu->type == CU_INTER) {
       // Reset transform depth because intra messes with them.
       // This will no longer be necessary if the transform depths are not shared.
@@ -541,28 +595,9 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
 
       kvz_inter_recon_cu(state, lcu, x, y, cu_width);
 
+      //Calculate cost for zero coefficients
       if (!ctrl->cfg.lossless && !ctrl->cfg.rdoq_enable) {
-        const int luma_index   = y_local * LCU_WIDTH + x_local;
-        const int chroma_index = (y_local / 2) * LCU_WIDTH_C + (x_local / 2);
-
-        double ssd = 0.0;
-        ssd += LUMA_MULT * kvz_pixels_calc_ssd(
-          &lcu->ref.y[luma_index], &lcu->rec.y[luma_index],
-          LCU_WIDTH, LCU_WIDTH, cu_width
-        );
-        ssd += CHROMA_MULT * kvz_pixels_calc_ssd(
-          &lcu->ref.u[chroma_index], &lcu->rec.u[chroma_index],
-          LCU_WIDTH_C, LCU_WIDTH_C, cu_width / 2
-        );
-        ssd += CHROMA_MULT * kvz_pixels_calc_ssd(
-          &lcu->ref.v[chroma_index], &lcu->rec.v[chroma_index],
-          LCU_WIDTH_C, LCU_WIDTH_C, cu_width / 2
-        );
-
-        inter_zero_coeff_cost = ssd + inter_bitcost * state->lambda;
-
-        // Save the pixels at a lower level of the working tree.
-        copy_cu_pixels(x_local, y_local, cu_width, lcu, &work_tree[depth + 1]);
+        zero_coeff_cost = cu_zero_cost(state, work_tree, x, y, depth) + inter_bitcost * state->lambda;
       }
 
       const bool has_chroma = state->encoder_control->chroma_format != KVZ_CSP_400;
@@ -601,13 +636,13 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
 
     cost += mode_bits * state->lambda;
 
-    if (inter_zero_coeff_cost <= cost) {
-      cost = inter_zero_coeff_cost;
+    if (zero_coeff_cost <= cost) {
+      cost = zero_coeff_cost;
 
       // Restore saved pixels from lower level of the working tree.
       copy_cu_pixels(x_local, y_local, cu_width, &work_tree[depth + 1], lcu);
 
-      if (cur_cu->merged && cur_cu->part_size == SIZE_2Nx2N) {
+      if (cur_cu->merged && cur_cu->part_size == SIZE_2Nx2N && cur_cu->type == CU_INTER) {
         cur_cu->merged = 0;
         cur_cu->skipped = 1;
         lcu_fill_cu_info(lcu, x_local, y_local, cu_width, cu_width, cur_cu);
