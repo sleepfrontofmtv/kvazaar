@@ -376,7 +376,7 @@ static uint8_t get_ctx_cu_split_model(const lcu_t *lcu, int x, int y, int depth)
   return condA + condL;
 }
 
-double cu_zero_cost(const encoder_state_t *state,
+static double cu_zero_coeff_cost(const encoder_state_t *state,
                         lcu_t *work_tree,
                         const int x, const int y,
                         const int depth) 
@@ -579,7 +579,7 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
 
       //Calculate cost for zero coefficients
       if (!ctrl->cfg.lossless && !ctrl->cfg.rdoq_enable && is_leaf && depth != MAX_PU_DEPTH) {
-        zero_coeff_cost = cu_zero_cost(state, work_tree, x, y, depth) + calc_mode_bits(state, lcu, cur_cu, x, y) *state->lambda;
+        zero_coeff_cost = cu_zero_coeff_cost(state, work_tree, x, y, depth) + calc_mode_bits(state, lcu, cur_cu, x, y) *state->lambda;
       }
       
       if (is_leaf) kvz_quantize_lcu_residual(state, true, has_chroma, x, y, depth, cur_cu, lcu);
@@ -597,7 +597,7 @@ static double search_cu(encoder_state_t * const state, int x, int y, int depth, 
 
       //Calculate cost for zero coefficients
       if (!ctrl->cfg.lossless && !ctrl->cfg.rdoq_enable) {
-        zero_coeff_cost = cu_zero_cost(state, work_tree, x, y, depth) + inter_bitcost * state->lambda;
+        zero_coeff_cost = cu_zero_coeff_cost(state, work_tree, x, y, depth) + inter_bitcost * state->lambda;
       }
 
       const bool has_chroma = state->encoder_control->chroma_format != KVZ_CSP_400;
