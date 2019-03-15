@@ -539,7 +539,7 @@ void print_help(void)
     "                                   - undef, bt709, bt470m, bt470bg,\n"
     "                                     smpte170m, smpte240m, linear, log100,\n"
     "                                     log316, iec61966-2-4, bt1361e,\n"
-    "                                     iec61966-2-1, bt2020-10, bt2020-12\n"
+    "                                     iec61966-2-1, bt2020-10, bt2020-12\n, smpte-st-2084"
     "      --colormatrix <string> : Specify color matrix setting [undef]\n"
     "                                   - undef, bt709, fcc, bt470bg, smpte170m,\n"
     "                                     smpte240m, GBR, YCgCo, bt2020nc, bt2020c\n"
