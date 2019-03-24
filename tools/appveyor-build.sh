@@ -9,4 +9,4 @@ export CC=gcc
     --build=$MINGW_CHOST \
     --target=$MINGW_CHOST \
     --disable-shared --enable-static
-make
+make -j  `nproc`
